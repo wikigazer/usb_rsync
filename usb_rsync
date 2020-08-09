@@ -1,0 +1,636 @@
+#!/bin/sh
+
+# Name		usb_rsync
+version=1
+# Author	paul[dot]blackburn[at]gmail[dot]com
+# Updated	Mon  3 Feb 13:17:34 GMT 2020
+# 2020_08_07	Optional 3 bells sound on successful completion "--bells"
+# 2020_08_07	Verify source and destination directories accessible for rsync
+# 2020_08_07	List contents on Android mobile storage
+
+# Purpose	run rsync between USB connected LG G7+ mobile running Android and local storage
+#		to copy Camera and Panorama 360 images to computer as backup storage.
+#
+# Usage		usb_rsync
+# Assumptions
+#		package gvfs-fuse is installed
+#		Android mobile phone is connected to computer with USB cable (for data transfer with rsync)
+#
+#		The local storage destination directory is a mounted SD card at /run/media/mpb/3831-6233/
+#		LG g7+ is switched on and cover flap open. USB cable connected between computer and mobile.
+#
+#		The Panorama380 app on mobile names files in format: '20-10-2018 02.26.29.jpg' which is not helpful.
+#               So, we rename these to format: 2018_10_20_at_02.26.29.jpg.
+#               This will have the effect of listing files in chronological order when viewing directory contents.
+#
+# Overview	First, rsync from mobile to local storage:
+#		a) Camera photos and videos,
+#		b) Two "Panorama360" app folders: "360Panoramas" and "Pictures/Panorama360" (the 2nd is current use)
+
+# #LOCAL        localizations: search for "#LOCAL" (below) and modify for your own needs:
+#                 default_notify=Your.email@wherever.org    # set to email to be notified of errors
+#
+# References
+#               https://askubuntu.com/questions/342319/where-are-mtp-mounted-devices-located-in-the-filesystem
+#		https://askubuntu.com/questions/865108/how-to-unmount-mtp-usb-device-from-command-line
+
+# functions -------------------------------------------------------------
+
+usage() {
+
+        cat <<eeooff
+${cmd}: run rsync between USB connected mobile phone running Android and local computer storage
+to copy Camera and Panorama 360 images to computer as backup storage.
+
+"rsync" copy across USB cable connection.
+
+Useful if mobile phone's camera storage is on an internal drive.
+Only needs a USB cable connection to work.
+
+This is an incremental copy only transferring what is new making it easier and faster
+when the camera internal storage is in the 10s of gb.
+
+${cmd} logs to ~/logs/${cmd} to help with  verifying and checking copy.
+
+Usage: ${cmd} [--bells]
+
+where: --bells will sound 3 bells on successful completion
+eeooff
+
+}
+
+fatal() {
+        echo "${cmd} fatal: ${1}" >&2
+        exit 1
+}
+
+error() {
+        echo "${cmd} error: ${1}" >&2
+}
+
+warning() {
+        echo "${cmd} warning: ${1}" >&2
+}
+
+tstamp() {
+        echo $(date +%Y_%m_%d_at_%H:%M:%S) ${cmd}: ${1}
+}
+
+doit() {
+        tstamp "${1}"
+        eval ${1}
+
+        retcode=$?
+        if [ ${retcode} != 0 ]; then
+                error "\$?=${retcode}"
+        fi
+}
+
+elapsed_time () {
+        start=${1}
+        end=${2}
+
+#       echo debug: elapsed_time ${start} ${end}
+        unset x
+        unset y
+
+        if [ ${start} = ${end} ]; then
+                echo -n "zero seconds"
+        fi
+
+        let elapsed_seconds=${end}-${start}
+        let days=${elapsed_seconds}/86400
+        let days_sec=${days}*86400
+
+        let x=${elapsed_seconds}-${days_sec}
+        let hours=${x}/3600
+        let hours_sec=${hours}*3600
+
+        let x=${days_sec}+${hours_sec}
+        let y=${elapsed_seconds}-${x}
+        let mins=${y}/60
+        let mins_sec=${mins}*60
+
+        let x=${days_sec}+${hours_sec}+${mins_sec}
+        let secs=${elapsed_seconds}-${x}
+
+        if [ ${days} != 0 ]; then
+                if [ ${days} = 1 ]; then
+                        echo -n "1 day "
+                else
+                        echo -n "${days} days "
+                fi
+        fi
+
+        if [ ${hours} != 0 ]; then
+                if [ ${hours} = 1 ]; then
+                        echo -n "1 hour "
+                else
+                        echo -n "${hours} hours "
+                fi
+        fi
+
+        if [ ${mins} != 0 ]; then
+                if [ ${mins} = 1 ]; then
+                        echo -n "1 minute "
+                else
+                        echo -n "${mins} minutes "
+                fi
+        fi
+
+        if [ ${secs} != 0 ]; then
+                if [ ${secs} = 1 ]; then
+                        echo -n "1 second "
+                else
+                        echo -n "${secs} seconds"
+                fi
+        fi
+
+        echo
+}
+
+trap_cleanup () {                # tidy up on receipt of signal (ctrl-C, etc)
+        tstamp "trap_cleanup commenced"
+
+        doit "rm ${lockfile}"
+
+        epoch_now=$(date +%s)
+        tstamp "total duration $(elapsed_time ${start_epoch} ${epoch_now})"
+
+        tstamp "trap_cleanup completed"
+        exit 1
+}
+
+# end functions section -------------------------------------------------
+
+
+# set initial values ----------------------------------------------------
+
+cmd=$(basename ${0})
+
+case "${1}" in
+        -? | -help | -usage | --?| --help | --usage )
+                usage
+                exit
+		;;
+esac
+
+tstamp "commenced $(dirname ${0})/${cmd} version ${version}"
+
+start_epoch=$(date +%s)
+bells="false"
+
+# NB: "~/logs" should nornally evaluate to a user's ~/logs even when this script is run via sudo
+logdir=~/logs
+log=${logdir}/${cmd}_log
+
+# We use lockfile to avoid running multiple ${cmd} at the same time
+tstamp "Checking if ${cmd} is already running"
+lockfile=/tmp/${cmd}_lockfile
+if [ -s "{lockfile}" ]; then
+	fatal "lockfile found. ${cmd} is already running. PID is $(cat ${lockfile})"
+else
+	tstamp "Good news: not already running so creating lockfile for process ID $$"
+	doit "echo $$ > ${lockfile}"
+fi
+
+tempfile=/tmp/${cmd}_tempfile_$$
+
+# Configure the following for your needs: #LOCAL
+
+default_notify=Your.email@wherever.org    # set to email to be notified of errors #LOCAL
+
+
+# main starts here ------------------------------------------------------------------------
+
+# set interrupt signal trap routine
+
+for signal in 1 2 3 15; do
+	trap "echo \"interrupted by signal ${signal}\"; trap_cleanup; exit 1" ${signal}
+done
+
+case "${1}" in
+        -? | -help | -usage | --?| --help | --usage )
+                usage
+                exit
+                ;;
+esac
+
+mkdir -p ${logdir} 2>/dev/null          # make sure we have a $logdir
+
+echo "stdout and stderr now being written to ${log}+"
+exec 4>&2
+exec 3>&1
+exec 1>${log}+
+exec 2>&1
+
+tstamp "commenced $(dirname ${0})/${cmd} version ${version} on $(date '+%a %d %h %y')"
+
+
+# local definitions follow. Modify as needed ----------------------------
+
+# If using SD card to rsync to then this is the SD card mount point
+SD_mount="/run/media/"${USER}"/3831-6233"
+SD_mount="/home/mpb"                     # Celebrity Millienium (missing SD card)
+
+# local base directory for rsync-ing to ( under ${SD_mount} )
+local_dir="Photos_rsync/G7+_ThinQ/LM_G710/internal_storage"
+
+tstamp "verify destination directory for rsync"
+
+if [ -d "${SD_mount}/${local_dir}" ]; then
+	tstamp "found rsync destination directory: ${SD_mount}/${local_dir}"
+	tstamp "verify can write to destination directory for rsync"
+	if [ -w "${SD_mount}/${local_dir}" ]; then
+		tstamp "confirmed: writable directory"
+	else
+		doit "ls -ld ${SD_mount}/${local_dir}"
+		fatal "unable to write to destination directory: ${SD_mount}/${local_dir}"
+	fi
+else
+	error "missing rsync destination directory: ${SD_mount}/${local_dir}"
+	tstamp "Check USB cable connected. If so, then disconnect and re-connect then try ${cmd} again"
+	fatal "unable to rsync because destination directory missing"
+fi
+
+
+# end of local definitions ----------------------------------------------
+
+
+# Sanity checking starts here -------------------------------------------
+
+tstamp "Check we running on Mageia"
+distro=$(cat /etc/release | awk '{ print $1}')
+if [ "${distro}" != "Mageia" ]; then
+        fatal "Not running on Mageia. Bye!"
+fi
+
+tstamp "Check which version of Mageia is running"
+release=$(cat /etc/release | awk '{ print $3}')
+
+#echo "This is Mageia ${release}"
+case ${release} in
+        8) tstamp "Mageia 8 OK"
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        7) tstamp "Mageia 7 OK"
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        6) tstamp "Mageia 6 is obsolete. Please upgrade to current release."
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        5) tstamp "Mageia 5 is obsolete. Please upgrade to current release."
+                urpmi_options="--allow-nodeps --force"
+                ;;
+        *) fatal "Not supported. Bye!"
+                ;;
+esac
+
+# We need to run as non-root
+if [ $(whoami) = "root" ]; then
+        fatal "You need to be non-root user to run ${cmd}. Bye!"
+fi
+
+# Do we have sudo installed?
+
+RPM=sudo
+tstamp "Checking we have ${RPM} installed"
+tstamp "rpm -qa | grep ${RPM}"
+current_version=$(rpm -qa | grep -iE ${RPM})
+if [ $? = 0 ]; then
+        tstamp "Installed ${RPM} is: ${current_version}"
+else
+        fatal "${RPM} is not installed. Please see: https://wiki.mageia.org/en/Configuring_sudo"
+fi
+
+# If we reached this point then we have sudo installed
+
+RPM=gvfs-fuse
+tstamp "Checking we have ${RPM} installed"
+tstamp "rpm -qa | grep ${RPM}"
+current_version=$(rpm -qa | grep -iE ${RPM})
+if [ $? = 0 ]; then
+        tstamp "Installed ${RPM} is: ${current_version}"
+else
+        tstamp "${RPM} is not installed"
+        doit "/bin/sudo urpmi ${RPM}"
+fi
+
+kernel_module=fuse
+tstamp "Checking the ${kernel_module} kernel module is loaded"
+doit "lsmod | grep -q fuse"
+if [ $? == 0 ]; then
+	tstamp "Good news: kernel module \"fuse\" (file system in user space) kernel module is loaded"
+else
+	fatal "kernel module \"fuse\" (file system in user space) is *not* loaded). modeprobe fuse or reboot"
+fi
+
+# crack command line arguments
+while [ ! -z "${1}" ]; do
+        case ${1} in
+                -notify )
+                        shift
+                        if [ -z "${1}" ]; then
+                                fatal "missing notify email address"
+                        else
+                                notify=${1}
+                        fi
+                        ;;
+                -notify*)
+                        notify=$(echo ${1} | cut -c8-)
+                        ;;
+                -help | -? | -usage )
+                        usage
+                        exit
+                        ;;
+		-bells | --bells )
+			bells="true"
+			;;
+                *)
+                        warning "unknown command line argument: ${1}"
+                        usage
+                        exit 1
+                        ;;
+        esac
+        shift
+done
+
+if [ -z "${notify}" ]; then
+        notify=${default_notify}
+fi
+
+# If we reached here then it is likely we can complete a normal run
+
+# but we need to switch the logfile.
+# Start by renaming an existing previous log by adding a date prefix
+
+if [ -s ${log} ]; then
+        old_log=$(dirname ${log})/$(date +%Y_%m_%d_at_%H:%M:%S)_$(basename ${log})
+        doit "mv -f ${log} ${old_log}    # rename previous log to <date>_log "
+fi
+doit "mv ${log}+ ${log}    # log cycling"
+
+# end of (most) sanity checking ---------------------------------------
+
+
+failed="false"
+
+export PATH=/usr/sbin:${PATH}
+
+tstamp "stage 0: confirm Android mobile internal storage directory"
+
+# source base directory via MTP mount from USB connected mobile
+src_base_raw="/run/user/"${UID}"/gvfs/mtp:host=*/*/"
+src_base=$(echo ${src_base_raw} | sed -e "s/ /\\\ /g")     # ugly hack to handle embedded spaces (meh!) in ${src_base_raw}
+tstamp "\$src_base is ${src_base}"
+
+tstamp "Verify read access to rsync source directory"
+
+doit "ls -qaCF ${src_base}"
+if [ $? == 0 ] ;then
+	tstamp "confirmed read access to: ${src_base}"
+	doit "ls -lhqa ${src_base}    # list contents of Android mobile phone internal storage"
+else
+	error "No read access to: ${src_base} for rsync copy"
+	fatal "Check USB cable connected to mobile. If so then disconnect cable, reconnect, and try ${cmd} again"
+fi
+
+
+tstamp "stage 1: rsync from mobile to local storage"
+
+dir_list="
+360Panoramas
+Download
+DCIM/Camera
+Pictures/Facebook
+Pictures/Messenger
+Pictures/Panorama360
+Pictures/Twitter
+Ringtones
+WhatsApp/Media
+"
+
+dir_count=$(echo ${dir_list} | sed -e "s/ /\n/g" | wc -l)
+
+tstamp "rsync-ing ${dir_count} directories:"
+echo ${dir_list} | sed -e "s/ /\n/g" | nl -ba
+echo
+
+for dir in ${dir_list}; do
+
+##	src="/run/user/500/gvfs/mtp:host=*/*/${dir}/"
+	src="${src_base}${dir}/"
+
+	if [ -d "${src}" ]; then
+		tstamp "Source is: ${src}"
+	else
+		error "not a directory: ${src}"
+	fi
+ 
+##	dst="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/${dir}/"  # Pan Pacific
+	dst="${SD_mount}/${local_dir}/${dir}/"
+
+	if [ -d ${dst} ]; then
+		tstamp "Destination is: ${dst}"
+	else
+		doit "mkdir -p ${dst}"
+		if [ $? = 0 ]; then
+			tstamp "created directory: ${dst}/"
+		else
+			fatal "failed to create directory: ${dst}" 
+		fi
+	fi
+
+	echo
+	doit "rsync --update --progress -azv -zz ${src} ${dst}"
+done
+
+echo
+tstamp "Stage 2: rsync and rename the Panorama 360 files (one by one) for chronological naming"
+tstamp "(rsync-ing from local to local storage.)"
+
+dst="${SD_mount}/${local_dir}/360Panoramas/360 panoramas/"
+cd "${dst}"
+
+echo
+tstamp "now in directory: $(pwd)"
+
+dir="../360_panoramas_sorted"
+if [ ! -d "${dir}" ]; then
+	doit "mkdir ${dir}"
+	if [ $? = 0 ]; then
+		echo "made directory: ${dir}"
+	else
+		fatal "${cmd} error: failed to create directory: ${dir}"
+	fi
+fi
+
+tstamp "generating script to handle the embedded space in filenames created by Panorama 360 app"
+tstamp "example: rsync -av \'22-06-2019 09.59.44.jpg\' ../360_panoramas_sorted/2019_06_22_at_09.59.44.jpg"
+
+script="${HOME}/usb_rsync_script"
+
+if [ -a ${script} ]; then
+	doit "mv -f ${script} ${script}-"
+fi
+
+echo "#!/bin/sh" > ${script}
+chmod 755 ${script}
+
+echo >> ${script}
+
+ls -1 | sed -e "s/ /\\\ /" -e "s,.*,rsync & ../360_panoramas_sorted," | sed -e "s/ / -/" -e "s/\\\/-&/" | awk -F- '{printf("%s-qv %s-%s-%s%s/%s_%s_%s_at_%s || echo fail\n",$1,$2,$3,$4,$5,$4,$3,$2,substr($5,3,12))}' >> ${script}
+
+tstamp "wrote: ${script}"
+tstamp "executing: ${script}"
+echo
+doit "sh -x ${script}"
+echo
+
+dst="${SD_mount}/${local_dir}/Pictures/Panorama360/"
+cd "${dst}"
+
+echo
+tstamp "now in directory: $(pwd)"
+
+dir="../Panorama360_sorted"
+if [ ! -d "${dir}" ]; then
+	doit "mkdir ${dir}"
+	if [ $? = 0 ]; then
+		tstamp "made directory: ${dir}"
+	else
+		fatal "${cmd} error: failed to create directory: ${dir}"
+	fi
+fi
+
+tstamp "generating script to handle the embedded space in filenames created by Panorama 360 app"
+tstamp "example: rsync -av '27-06-2019 11.00.26.jpg' ../Panorama360_sorted/2019_06_27_at_11.00.26.jpg"
+
+if [ -a ${script} ]; then
+        doit "mv -f ${script} ${script}-"
+fi
+
+echo "#!/bin/sh" > ${script}
+chmod 755 ${script}
+
+echo >>  ${script}
+
+ls -1 | sed -e "s/ /\\\ /" -e "s,.*,rsync & ../Panorama360_sorted," | sed -e "s/ / -/" -e "s/\\\/-&/" | awk -F- '{printf("%s-qv %s-%s-%s%s/%s_%s_%s_at_%s || echo fail\n",$1,$2,$3,$4,$5,$4,$3,$2,substr($5,3,12))}' >> ${script}
+
+tstamp "wrote: ${script}"
+tstamp "executing: ${script}"
+echo
+doit "sh -x ${script}"
+echo
+
+echo
+tstamp "Summary:"
+echo
+tstamp " Source: ${src_base}"
+echo
+tstamp " total:"
+d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/"
+d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/"
+echo "  size="$(du -h ${d} | tail -1)
+
+d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/DCIM/Camera/"
+d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/DCIM/Camera/"
+echo 
+echo "Camera: ${d}"
+echo " jpg files: "$(ls ${d} | grep .jpg | wc -l)
+echo " mp4 files: "$(ls ${d} | grep .mp4 | wc -l)
+
+echo
+echo "Panorama 360 files"
+d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/360Panoramas/360_panoramas_sorted/"
+d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/360Panoramas/360_panoramas_sorted/"
+echo " panoramas: "$(ls ${d} | grep .jpg | wc -l)" "${d}
+
+d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/Pictures/Panorama360_sorted/"
+d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/Pictures/Panorama360_sorted/"
+echo " Panorama360s: "$(ls ${d} | grep .jpg | wc -l)" "${d}
+
+
+d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/Pictures/Twitter/"
+d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/Pictures/Twitter/"
+echo
+echo "Twitter: "$(ls ${d} | grep .jpg | wc -l)" "${d}
+
+d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/WhatsApp/Media/"
+d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/WhatsApp/Media/"
+echo
+echo "WhatsApp Media: "
+echo du -h ${d}
+du -h ${d}
+
+echo
+echo list2 summary:
+echo
+
+dir_list2="
+360Panoramas
+Download
+DCIM/Camera
+Pictures/Facebook
+Pictures/Messenger
+Pictures/Panorama360
+Pictures/Twitter
+Ringtones
+WhatsApp/Media
+"
+
+for dir in ${dir_list2}; do
+	d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/${dir}/"
+	echo
+	echo ${dir}
+	echo du -h ${d}
+	du -h ${d}
+done
+
+
+# tidying up and ending ------------------------------------------------------------------
+
+disconnect_cable="false"
+tstamp "unmounting Android mobile phone internal storage"
+process_name="gvfsd-mtp"
+doit "ps -ef | grep ${process_name} | grep -v grep   # display process handling Android mobile storage mount"
+if [ $? != 0 ]; then
+	warning "unable to find ${process_name}"
+else
+	doit "pkill -9 gvfsd-mtp    # unmount the fuse mounted MTP device - Android mobile phone internal memory"
+	if [ $? == 0 ]; then
+		disconnect_cable="true"
+		tstamp "Android mobile phone storage unmounted"
+		tstamp "+--------------------------------------------------------+"
+		tstamp "| It is OK now to disconnect USB cable to Android mobile |"
+		tstamp "+--------------------------------------------------------+"
+	else
+		warming "failed to stop the ${process_name} automatically. Right click on mobile desktop icon and select \"Umount\""
+	fi
+fi
+
+end_epoch=$(date +%s)
+
+tstamp "total duration $(elapsed_time ${start_epoch} ${end_epoch})"
+tstamp "completed"
+
+# Switch stdout and stderr back to report results if something failed
+
+if [ "${failed}" = "true" ]; then
+        exec 1>&3
+        exec 2>&4
+        < ${log} mail -s "${cmd} on $(hostname)" ${notify}
+fi
+
+if [ "${disconnect_cable}" = "true" ]; then
+        exec 1>&3
+        exec 2>&4
+	if [ ${bells} = "true" ]; then
+		echo bells
+		echo -e "\a"; sleep 1; echo -e "\a"; sleep 1; echo -e "\a"		
+	fi
+	tstamp "Android mobile phone storage unmounted"
+	tstamp "+--------------------------------------------------------+"
+	tstamp "| It is OK to disconnect USB cable to Android mobile now |"
+	tstamp "+--------------------------------------------------------+"
+fi
