@@ -47,6 +47,9 @@ In "usb_rsync" local storage on computer has been initally defined as:
 How to use:
 -----------
 a) Connect Android mobile to computer (using highest speed USB connection available).
+
 b) On computer, run: "usb_rsync".
+
 c) Monitor progress: "tail -f ~/logs/usb_rsync".
+
 d) When completed the mobile storage is automatically un-mounted so USB cable may be disconnected.
