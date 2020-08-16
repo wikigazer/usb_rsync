@@ -31,10 +31,13 @@ For the mount of the internal storage on the Android mobile to work, "gvfs-fuse"
 and the kernel module "fuse" to be loaded. "usb_rsync" checks for these.
 
 When the USB cable is connected: the path for Android internal storage is automatically mounted under:
+
     "/run/user/"${UID}"/gvfs/mtp:host=*/*/"
 
 In "usb_rsync" local storage on computer has been initally defined as:
+
     local_dir=${HOME}/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/
+    
                         ^               ^      ^
             rsync data /               /      /
                          device name  /      /
