@@ -3,7 +3,8 @@
 # Name		usb_rsync
 version=1
 # Author	paul[dot]blackburn[at]gmail[dot]com
-# Updated	Sat 15 Aug 17:28:18 BST 2020 
+# Updated	Mon 17 Aug 23:26:08 BST 2020
+
 # 
 # 2020_08_15	remove hard coded paths, remove surplus [ -d ] test
 # 2020_08_07	Optional 3 bells sound on successful completion "--bells"
@@ -185,7 +186,7 @@ tstamp "commenced $(dirname ${0})/${cmd} version ${version}"
 start_epoch=$(date +%s)
 bells="false"
 
-# NB: "~/logs" should nornally evaluate to a user's ~/logs even when this script is run via sudo
+# NB: "~/logs" should normally evaluate to a user's ~/logs even when this script is run via sudo
 logdir=~/logs
 log=${logdir}/${cmd}_log
 
