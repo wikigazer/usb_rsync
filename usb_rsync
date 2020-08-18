@@ -1,11 +1,12 @@
-#!/bin/sh
+#!/usr/bin/bash
 
 # Name		usb_rsync
 version=1
 # Author	paul[dot]blackburn[at]gmail[dot]com
-# Updated	Mon 17 Aug 23:26:08 BST 2020
+# Updated	Tue 18 Aug 12:58:26 BST 2020
 
-# 
+# 2020_08_18	switch to using $return_code global to check error returns if any
+# 2020_08_18    remove surplus code, tidy comments
 # 2020_08_15	remove hard coded paths, remove surplus [ -d ] test
 # 2020_08_07	Optional 3 bells sound on successful completion "--bells"
 # 2020_08_07	Verify source and destination directories accessible for rsync
@@ -83,12 +84,18 @@ tstamp() {
 }
 
 doit() {
+
+# do it: time stamp and execute a command.
+# Also set global variable "return_code" to the return code from the command
+# so that the calling code can check for error status if any.
+# Hence, define "return_code=0" near start of any script using this "doit" function
+
         tstamp "${1}"
         eval ${1}
 
-        retcode=$?
-        if [ ${retcode} != 0 ]; then
-                error "\$?=${retcode}"
+        return_code=$?
+        if [ ${return_code} != 0 ]; then
+                error "\$?=${return_code}"
         fi
 }
 
@@ -172,6 +179,7 @@ trap_cleanup () {                # tidy up on receipt of signal (ctrl-C, etc)
 
 # set initial values ----------------------------------------------------
 
+return_code=0
 cmd=$(basename ${0})
 
 case "${1}" in
@@ -200,11 +208,10 @@ else
 	doit "echo $$ > ${lockfile}"
 fi
 
-tempfile=/tmp/${cmd}_tempfile_$$
-
 # Configure the following for your needs: #LOCAL
 
-default_notify=Your.email@wherever.org    # set to email to be notified of errors #LOCAL
+#default_notify=Your.email@wherever.org    # set to email to be notified of errors #LOCAL
+default_notify=""  # set to email to empty by default - no email sent be notified of errors #LOCAL
 
 
 # main starts here ------------------------------------------------------------------------
@@ -244,10 +251,11 @@ SD_mount="/run/media/"${USER}"/3831-6233"
 # Otherwise, the local copy will be in our ${HOME}
 SD_mount=${HOME}
 
+##LOCAL
 # local base directory for rsync-ing to ( under ${SD_mount} )
 # Following example has:
-# Photos_rsync in $HOME
-#                       vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv - follows directory layout on (my) LG G7+
+# Photos_rsync in $HOME, device name, model, and "internal_storage"
+#
 local_dir="Photos_rsync/G7+_ThinQ/LM_G710/internal_storage"
 
 
@@ -267,7 +275,6 @@ else
 	tstamp "Check USB cable connected. If so, then disconnect and re-connect then try ${cmd} again"
 	fatal "unable to rsync because destination directory missing"
 fi
-
 
 # end of local definitions ----------------------------------------------
 
@@ -334,7 +341,7 @@ fi
 kernel_module=fuse
 tstamp "Checking the ${kernel_module} kernel module is loaded"
 doit "lsmod | grep -q fuse"
-if [ $? == 0 ]; then
+if [ ${return_code} -eq 0 ] ;then
 	tstamp "Good news: kernel module \"fuse\" (file system in user space) kernel module is loaded"
 else
 	fatal "kernel module \"fuse\" (file system in user space) is *not* loaded). modeprobe fuse or reboot"
@@ -401,12 +408,14 @@ tstamp "\$src_base is ${src_base}"
 
 tstamp "Verify read access to rsync source directory"
 
-doit "ls -qaCF ${src_base}"
-if [ $? == 0 ] ;then
+doit "ls -qaCF ${src_base}" 
+#echo "\$return_code is: ${return_code}"
+if [ ${return_code} -eq 0 ] ;then
 	tstamp "confirmed read access to: ${src_base}"
 	doit "ls -lhqa ${src_base}    # list contents of Android mobile phone internal storage"
 else
-	error "No read access to: ${src_base} for rsync copy"
+	failed="true"
+	error "No read access to: ${src_base} for rsync copy. \$return_code is ${return_code}"
 	fatal "Check USB cable connected to mobile. If so then disconnect cable, reconnect, and try ${cmd} again"
 fi
 
@@ -456,7 +465,7 @@ for dir in ${dir_list}; do
 		tstamp "Destination is: ${dst}"
 	else
 		doit "mkdir -p ${dst}"
-		if [ $? = 0 ]; then
+		if [ ${return_code} -eq 0 ] ;then
 			tstamp "created directory: ${dst}/"
 		else
 			fatal "failed to create directory: ${dst}" 
@@ -480,7 +489,7 @@ tstamp "now in directory: $(pwd)"
 dir="../360_panoramas_sorted"
 if [ ! -d "${dir}" ]; then
 	doit "mkdir ${dir}"
-	if [ $? = 0 ]; then
+	if [ ${return_code} -eq 0 ] ;then
 		echo "made directory: ${dir}"
 	else
 		fatal "${cmd} error: failed to create directory: ${dir}"
@@ -518,7 +527,7 @@ tstamp "now in directory: $(pwd)"
 dir="../Panorama360_sorted"
 if [ ! -d "${dir}" ]; then
 	doit "mkdir ${dir}"
-	if [ $? = 0 ]; then
+	if [ ${return_code} -eq 0 ] ;then
 		tstamp "made directory: ${dir}"
 	else
 		fatal "${cmd} error: failed to create directory: ${dir}"
@@ -551,11 +560,10 @@ echo
 tstamp " Source: ${src_base}"
 echo
 tstamp " total:"
-d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/"
+
 d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/"
 echo "  size="$(du -h ${d} | tail -1)
 
-d="/run/media/mpb/3831-6233/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/DCIM/Camera/"
 d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/DCIM/Camera/"
 echo 
 echo "Camera: ${d}"
@@ -585,29 +593,29 @@ echo "WhatsApp Media: "
 echo du -h ${d}
 du -h ${d}
 
-echo
-echo list2 summary:
-echo
+# echo
+# echo list2 summary:
+# echo
 
-dir_list2="
-360Panoramas
-Download
-DCIM/Camera
-Pictures/Facebook
-Pictures/Messenger
-Pictures/Panorama360
-Pictures/Twitter
-Ringtones
-WhatsApp/Media
-"
+# dir_list2="
+# 360Panoramas
+# Download
+# DCIM/Camera
+# Pictures/Facebook
+# Pictures/Messenger
+# Pictures/Panorama360
+# Pictures/Twitter
+# Ringtones
+# WhatsApp/Media
+# "
 
-for dir in ${dir_list2}; do
-	d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/${dir}/"
-	echo
-	echo ${dir}
-	echo du -h ${d}
-	du -h ${d}
-done
+# for dir in ${dir_list2}; do
+# 	d=${SD_mount}"/Photos_rsync/G7+_ThinQ/LM_G710/internal_storage/${dir}/"
+# 	echo
+# 	echo ${dir}
+# 	echo du -h ${d}
+# 	du -h ${d}
+# done
 
 
 # tidying up and ending ------------------------------------------------------------------
@@ -616,11 +624,11 @@ disconnect_cable="false"
 tstamp "unmounting Android mobile phone internal storage"
 process_name="gvfsd-mtp"
 doit "ps -ef | grep ${process_name} | grep -v grep   # display process handling Android mobile storage mount"
-if [ $? != 0 ]; then
+if [ ${return_code} != 0 ] ;then
 	warning "unable to find ${process_name}"
 else
 	doit "pkill -9 gvfsd-mtp    # unmount the fuse mounted MTP device - Android mobile phone internal memory"
-	if [ $? == 0 ]; then
+	if [ ${return_code} -eq 0 ] ;then
 		disconnect_cable="true"
 		tstamp "Android mobile phone storage unmounted"
 		tstamp "+--------------------------------------------------------+"
@@ -641,7 +649,11 @@ tstamp "completed"
 if [ "${failed}" = "true" ]; then
         exec 1>&3
         exec 2>&4
-        < ${log} mail -s "${cmd} on $(hostname)" ${notify}
+	if [ ! -z "${notify}"; then	# only email if $notify is non-empty string
+		< ${log} mail -s "${cmd} on $(hostname)" ${notify}
+	else
+		error "failed. Review log."
+	fi
 fi
 
 if [ "${disconnect_cable}" = "true" ]; then
@@ -653,6 +665,8 @@ if [ "${disconnect_cable}" = "true" ]; then
 			echo $'\a'
 			sleep 1
 		done
+	else
+		echo "(debug: no bells requested)"
 	fi
 	tstamp "Android mobile phone storage unmounted"
 	tstamp "+--------------------------------------------------------+"
