@@ -3,7 +3,7 @@
 # Name		usb_rsync
 version=1
 # Author	paul[dot]blackburn[at]gmail[dot]com
-# Updated	Tue 18 Aug 12:58:26 BST 2020
+# Updated	Wed 19 Aug 19:00:31 BST 2020
 
 # 2020_08_18	switch to using $return_code global to check error returns if any
 # 2020_08_18    remove surplus code, tidy comments
@@ -635,7 +635,7 @@ else
 		tstamp "| It is OK now to disconnect USB cable to Android mobile |"
 		tstamp "+--------------------------------------------------------+"
 	else
-		warming "failed to stop the ${process_name} automatically. Right click on mobile desktop icon and select \"Umount\""
+		warning "failed to stop the ${process_name} automatically. Right click on mobile desktop icon and select \"Umount\""
 	fi
 fi
 
